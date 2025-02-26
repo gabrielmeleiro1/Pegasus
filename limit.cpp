@@ -10,6 +10,10 @@ Limit::Limit(double price)
 
 void Limit::addOrder(Order* order)
 {
+    if (!order) {
+        return;  // Safety check
+    }
+    
     // Insert at the back of the FIFO list
     m_orders.push_back(order);
 
@@ -20,13 +24,19 @@ void Limit::addOrder(Order* order)
 
 void Limit::removeOrder(Order* order)
 {
+    if (!order) {
+        return;  // Safety check
+    }
+    
     // We find the order in O(n) time in std::list.
     // For a learning project, this is okay; in production HFT, you'd optimize this.
     auto it = std::find(m_orders.begin(), m_orders.end(), order);
     if (it != m_orders.end()) {
-        // Decrease total volume
+        // Decrease total volume - only consider unfilled quantity
         double remainingQty = order->getQuantity() - order->getFilledQty();
-        updateTotalVolume(-remainingQty);
+        if (remainingQty > 0) {
+            updateTotalVolume(-remainingQty);
+        }
 
         // Erase it from the list
         m_orders.erase(it);
