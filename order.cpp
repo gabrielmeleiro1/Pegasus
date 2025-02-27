@@ -14,8 +14,10 @@ Order::Order(OrderID id,
       m_price(price),
       m_quantity(quantity),
       m_filledQty(0.0),
+      m_filledQtyAtomic(0.0),
       m_stopPrice(stopPrice),
-      m_isActive(true)
+      m_isActive(true),
+      m_isActiveAtomic(true)
 {
     // Add additional validation
     // like price > 0, quantity > 0, etc.)
