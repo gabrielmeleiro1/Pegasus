@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <vector>
 #include <functional>
+#include <memory>
 #include "limit.h"
 #include "order.h"
 
@@ -16,8 +17,8 @@
  */
 class OrderBook {
 public:
-    using OrderPtr = Order*;
-    using LimitPtr = Limit*;
+    using OrderPtr = std::shared_ptr<Order>;
+    using LimitPtr = Limit*;  // Limits are still managed by the OrderBook
     using OrderMap = std::unordered_map<Order::OrderID, OrderPtr>;
     
     explicit OrderBook(const std::string& symbol);
@@ -33,9 +34,11 @@ public:
      * @brief Add a new order to the book
      * 
      * @param order The order to add
+     * @param fillCallback Optional callback function to be called for each fill
      * @return true if added successfully, false otherwise
      */
-    bool addOrder(OrderPtr order);
+    bool addOrder(OrderPtr order, 
+                 const std::function<void(const std::string&, double, double, double)>& fillCallback = nullptr);
     
     /**
      * @brief Cancel an existing order
@@ -56,7 +59,7 @@ public:
      * @return true if order fully processed, false otherwise
      */
     bool matchOrder(OrderPtr order, 
-                    std::function<void(OrderPtr, OrderPtr, double, double)> fillCallback);
+                    const std::function<void(const std::string&, double, double, double)>& fillCallback);
     
     /**
      * @brief Get current best bid price

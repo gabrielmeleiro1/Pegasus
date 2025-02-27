@@ -19,10 +19,11 @@ OrderBook::~OrderBook()
         delete limit;
     }
     
-    // The orders themselves are not owned by the OrderBook
+    // Orders are now managed by shared_ptr
 }
 
-bool OrderBook::addOrder(OrderPtr order)
+bool OrderBook::addOrder(OrderPtr order, 
+                         const std::function<void(const std::string&, double, double, double)>& fillCallback)
 {
     // Validate order
     if (!order || !order->isActive()) {
@@ -38,7 +39,7 @@ bool OrderBook::addOrder(OrderPtr order)
     if (order->getType() == OrderType::MARKET) {
         // We don't add market orders to the book if they don't execute fully
         // In a real exchange, this might return "rejected" status
-        return matchOrder(order, [](OrderPtr, OrderPtr, double, double) {});
+        return matchOrder(order, fillCallback);
     }
     
     // For limit orders, add to the book
@@ -63,7 +64,7 @@ bool OrderBook::cancelOrder(Order::OrderID orderId)
 }
 
 bool OrderBook::matchOrder(OrderPtr order, 
-                        std::function<void(OrderPtr, OrderPtr, double, double)> fillCallback)
+                        const std::function<void(const std::string&, double, double, double)>& fillCallback)
 {
     // Basic validations
     if (!order || !order->isActive()) {
@@ -108,8 +109,10 @@ bool OrderBook::matchOrder(OrderPtr order,
             order->fillQuantity(fillQty);
             matchingOrder->fillQuantity(fillQty);
             
-            // Invoke the callback with fill details
-            fillCallback(order, matchingOrder, fillQty, fillPrice);
+            // Invoke the callback with fill details if provided
+            if (fillCallback) {
+                fillCallback(m_symbol, fillPrice, fillQty, order->getSide() == Side::BUY ? 1.0 : -1.0);
+            }
             
             // Update remaining quantity
             remainingQty -= fillQty;
@@ -165,8 +168,10 @@ bool OrderBook::matchOrder(OrderPtr order,
             order->fillQuantity(fillQty);
             matchingOrder->fillQuantity(fillQty);
             
-            // Invoke the callback with fill details
-            fillCallback(order, matchingOrder, fillQty, fillPrice);
+            // Invoke the callback with fill details if provided
+            if (fillCallback) {
+                fillCallback(m_symbol, fillPrice, fillQty, order->getSide() == Side::BUY ? 1.0 : -1.0);
+            }
             
             // Update remaining quantity
             remainingQty -= fillQty;

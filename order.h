@@ -3,6 +3,7 @@
 
 #include <string>
 #include <cstdint>
+#include <atomic>
 
 enum class Side {
     BUY,
@@ -50,13 +51,31 @@ public:
     double         getStopPrice()const { return m_stopPrice; }
     double         getQuantity() const { return m_quantity; }
 
-    double         getFilledQty() const { return m_filledQty; }
-    bool           isActive()     const { return m_isActive; }
+    double         getFilledQty() const { return m_filledQtyAtomic.load(std::memory_order_acquire); }
+    bool           isActive()     const { return m_isActiveAtomic.load(std::memory_order_acquire); }
 
-    // Setters / updaters
+    // Setters / updaters with atomic operations for thread safety
     void setQuantity(double newQuantity)   { m_quantity = newQuantity; }
-    void fillQuantity(double fillAmount)   { m_filledQty += fillAmount; }
-    void deactivate()                      { m_isActive = false; }
+    
+    // Thread-safe fill quantity operation
+    void fillQuantity(double fillAmount)   { 
+        // Use atomic operation for updating filled quantity
+        double current = m_filledQty;
+        double desired = current + fillAmount;
+        // Keep trying until we successfully update the value
+        while (!m_filledQtyAtomic.compare_exchange_weak(current, desired)) {
+            // If compare_exchange_weak fails, current is updated with the latest value
+            // Recalculate desired based on the updated current
+            desired = current + fillAmount;
+        }
+        m_filledQty = desired; // Update the regular member for consistency
+    }
+    
+    // Thread-safe deactivation
+    void deactivate() { 
+        m_isActiveAtomic.store(false, std::memory_order_release);
+        m_isActive = false; 
+    }
 
 private:
     OrderID       m_id;
@@ -66,11 +85,13 @@ private:
 
     double        m_price;      ///< Limit price
     double        m_quantity;   ///< Initial quantity (remaining quantity can be derived as m_quantity - m_filledQty)
-    double        m_filledQty;  ///< How much has been filled so far
+    double        m_filledQty;  ///< How much has been filled so far (cached value, see atomic version)
+    std::atomic<double> m_filledQtyAtomic;  ///< Atomic version for thread safety
 
     double        m_stopPrice;  ///< For STOP_LIMIT; 0 if not used.
 
-    bool          m_isActive;   ///< Simple flag to indicate if order is still live.
+    bool          m_isActive;   ///< Simple flag to indicate if order is still live (cached value, see atomic version)
+    std::atomic<bool> m_isActiveAtomic;   ///< Atomic version for thread safety
 };
 
 #endif // ORDER_H
