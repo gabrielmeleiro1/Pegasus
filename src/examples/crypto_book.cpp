@@ -23,8 +23,8 @@ class CryptoMarket {
 public:
     static constexpr const char* SYMBOL = "ETH/USD";
     static constexpr double BASE_PRICE = 3200.0;    // Central tendency for mean reversion
-    static constexpr double PRICE_VOLATILITY = 30.0; // Volatility for random walk
-    static constexpr double MEAN_REVERSION = 0.05;  // Strength of mean reversion (0-1)
+    static constexpr double PRICE_VOLATILITY = 50.0; // Higher volatility for faster price movement
+    static constexpr double MEAN_REVERSION = 0.03;  // Reduced mean reversion for wilder price swings
     static constexpr double MIN_QTY = 0.1;          // 0.1 ETH
     static constexpr double MAX_QTY = 5.0;          // 5 ETH
     static constexpr double PRICE_STEP = 0.5;       // $0.50 price increments
@@ -155,198 +155,6 @@ std::string formatWithCommas(double value, int precision) {
     return numStr;
 }
 
-// Print the order book in a nicely formatted way
-void printOrderBook(OrderBook& book, int levels) {
-    std::lock_guard<std::mutex> lock(consoleMutex);
-    std::cout << BOLD << "===== " << CryptoMarket::SYMBOL << " ORDER BOOK =====" << RESET << std::endl;
-    
-    // Get bid and ask price points from the order book
-    // For a real implementation, we'd add methods to OrderBook to access these directly
-    
-    // Get current mid price with thread safety
-    double currentMidPrice;
-    {
-        std::lock_guard<std::mutex> lock(dataMutex);
-        currentMidPrice = CryptoMarket::currentMidPrice;
-    }
-    
-    // Collect ask levels (around current mid price)
-    std::vector<BookLevel> asks;
-    double askTotal = 0.0;
-    double askValueTotal = 0.0;
-    
-    // For each ask level, look within a certain range of the current price
-    double startAskPrice = currentMidPrice - 50.0;  // Look below current price
-    double endAskPrice = currentMidPrice + 150.0;   // Look above current price
-    
-    for (double price = startAskPrice; price <= endAskPrice; price += CryptoMarket::PRICE_STEP) {
-        // Create a dummy order to find matching limit
-        auto dummyOrder = std::make_shared<Order>(0, Side::BUY, OrderType::LIMIT, CryptoMarket::SYMBOL, price, 0.01);
-        
-        // If this dummy BUY order would match with a SELL order at this price, it means there's an ask at this price
-        bool hasOrders = false;
-        book.matchOrder(dummyOrder, [&hasOrders](const std::string&, double, double, double) {
-            hasOrders = true;
-        });
-        
-        if (hasOrders) {
-            // In a real implementation, we would have a method to get the total volume at this price level
-            // For demonstration purposes, we'll use a random value as a proxy
-            double qty = 0.5 + (static_cast<double>(rand()) / RAND_MAX) * 3.0;
-            askTotal += qty;
-            askValueTotal += (qty * price);
-            asks.push_back({price, qty, askTotal, askValueTotal});
-            
-            if (asks.size() >= static_cast<size_t>(levels)) break;
-        }
-    }
-    
-    // Collect bid levels (around current mid price)
-    std::vector<BookLevel> bids;
-    double bidTotal = 0.0;
-    double bidValueTotal = 0.0;
-    
-    // For each bid level, look within a certain range of the current price
-    double startBidPrice = currentMidPrice + 50.0;  // Look above current price
-    double endBidPrice = currentMidPrice - 150.0;   // Look below current price
-    
-    for (double price = startBidPrice; price >= endBidPrice; price -= CryptoMarket::PRICE_STEP) {
-        // Create a dummy order to find matching limit
-        auto dummyOrder = std::make_shared<Order>(0, Side::SELL, OrderType::LIMIT, CryptoMarket::SYMBOL, price, 0.01);
-        
-        // If this dummy SELL order would match with a BUY order at this price, it means there's a bid at this price
-        // We use a local callback to avoid modifying the actual order book
-        bool hasOrders = false;
-        book.matchOrder(dummyOrder, [&hasOrders](const std::string&, double, double, double) {
-            hasOrders = true;
-        });
-        
-        if (hasOrders) {
-            // In a real implementation, we would have a method to get the total volume at this price level
-            // For demonstration purposes, we'll use a random value as a proxy
-            double qty = 0.5 + (static_cast<double>(rand()) / RAND_MAX) * 3.0;
-            bidTotal += qty;
-            bidValueTotal += (qty * price);
-            bids.push_back({price, qty, bidTotal, bidValueTotal});
-            
-            if (bids.size() >= static_cast<size_t>(levels)) break;
-        }
-    }
-    
-    // Column widths for alignment
-    const int priceWidth = 14;
-    const int qtyWidth = 12;
-    const int totalQtyWidth = 12;
-    const int totalValueWidth = 16;
-    
-    // Print ask/sell section headers
-    std::cout << std::string(priceWidth + qtyWidth + totalQtyWidth + totalValueWidth, '-') << std::endl;
-    std::cout << BOLD << RED 
-              << std::left << std::setw(priceWidth) << "Price(USDT)" 
-              << std::right << std::setw(qtyWidth) << "Qty(ETH)" 
-              << std::right << std::setw(totalQtyWidth) << "Total(ETH)" 
-              << std::right << std::setw(totalValueWidth) << "Total(USDT)" 
-              << RESET << std::endl;
-    std::cout << std::string(priceWidth + qtyWidth + totalQtyWidth + totalValueWidth, '-') << std::endl;
-    
-    // Print ask/sell orders (in descending price order)
-    std::sort(asks.begin(), asks.end(), [](const BookLevel& a, const BookLevel& b) {
-        return a.price > b.price; // Sort in descending order
-    });
-    
-    // Calculate running totals from lowest ask to highest
-    std::vector<double> runningAsksQty(asks.size());
-    std::vector<double> runningAsksValue(asks.size());
-    
-    if (!asks.empty()) {
-        // Create a copy of asks sorted by ascending price for running totals
-        std::vector<BookLevel> asksAscending = asks;
-        std::sort(asksAscending.begin(), asksAscending.end(), [](const BookLevel& a, const BookLevel& b) {
-            return a.price < b.price;
-        });
-        
-        double runningQty = 0;
-        double runningValue = 0;
-        for (size_t i = 0; i < asksAscending.size(); i++) {
-            runningQty += asksAscending[i].quantity;
-            runningValue += (asksAscending[i].quantity * asksAscending[i].price);
-            
-            // Find this price level in the original asks array
-            for (size_t j = 0; j < asks.size(); j++) {
-                if (std::abs(asks[j].price - asksAscending[i].price) < 0.001) {
-                    runningAsksQty[j] = runningQty;
-                    runningAsksValue[j] = runningValue;
-                    break;
-                }
-            }
-        }
-    }
-    
-    for (size_t i = 0; i < asks.size(); i++) {
-        std::cout << RED << std::left << std::setw(priceWidth) << formatWithCommas(asks[i].price, 1)
-                  << std::right << std::setw(qtyWidth) << formatWithCommas(asks[i].quantity, 3)
-                  << std::right << std::setw(totalQtyWidth) << formatWithCommas(runningAsksQty[i], 3)
-                  << std::right << std::setw(totalValueWidth) << formatWithCommas(runningAsksValue[i], 1)
-                  << RESET << std::endl;
-    }
-    
-    // Print spread section
-    std::cout << std::string(priceWidth + qtyWidth + totalQtyWidth + totalValueWidth, '=') << std::endl;
-    
-    if (!bids.empty() && !asks.empty()) {
-        double bestBid = bids.front().price;
-        double bestAsk = asks.back().price;  // Last element in descending order is the lowest ask
-        double spread = bestAsk - bestBid;
-        double spreadPct = (spread / bestBid) * 100.0;
-        
-        // Calculate bid/ask midpoint
-        double midpoint = (bestBid + bestAsk) / 2.0;
-        
-        std::cout << BOLD << CYAN << std::left << std::setw(priceWidth) << "SPREAD" 
-                  << std::right << std::setw(qtyWidth) << formatWithCommas(spread, 1) 
-                  << " ⟷ " << std::setprecision(2) << spreadPct << "%" << RESET << std::endl;
-                  
-        std::cout << BOLD << CYAN << std::left << std::setw(priceWidth) << "MID" 
-                  << std::right << std::setw(qtyWidth) << formatWithCommas(midpoint, 1) 
-                  << RESET << std::endl;
-    }
-    
-    std::cout << std::string(priceWidth + qtyWidth + totalQtyWidth + totalValueWidth, '=') << std::endl;
-    
-    // Print bid/buy section headers
-    std::cout << BOLD << GREEN 
-              << std::left << std::setw(priceWidth) << "Price(USDT)" 
-              << std::right << std::setw(qtyWidth) << "Qty(ETH)" 
-              << std::right << std::setw(totalQtyWidth) << "Total(ETH)" 
-              << std::right << std::setw(totalValueWidth) << "Total(USDT)" 
-              << RESET << std::endl;
-    std::cout << std::string(priceWidth + qtyWidth + totalQtyWidth + totalValueWidth, '-') << std::endl;
-    
-    // Calculate running totals for bids
-    std::vector<double> runningBidsQty(bids.size());
-    std::vector<double> runningBidsValue(bids.size());
-    
-    double runningQty = 0;
-    double runningValue = 0;
-    for (size_t i = 0; i < bids.size(); i++) {
-        runningQty += bids[i].quantity;
-        runningValue += (bids[i].quantity * bids[i].price);
-        runningBidsQty[i] = runningQty;
-        runningBidsValue[i] = runningValue;
-    }
-    
-    // Print bid/buy orders (already in descending price order)
-    for (size_t i = 0; i < bids.size(); i++) {
-        std::cout << GREEN << std::left << std::setw(priceWidth) << formatWithCommas(bids[i].price, 1)
-                  << std::right << std::setw(qtyWidth) << formatWithCommas(bids[i].quantity, 3)
-                  << std::right << std::setw(totalQtyWidth) << formatWithCommas(runningBidsQty[i], 3)
-                  << std::right << std::setw(totalValueWidth) << formatWithCommas(runningBidsValue[i], 1)
-                  << RESET << std::endl;
-    }
-    
-    std::cout << std::string(priceWidth + qtyWidth + totalQtyWidth + totalValueWidth, '=') << std::endl;
-}
-
 // Handle order fills
 void logFill(const std::string& symbol, double price, double quantity, double side) {
     std::lock_guard<std::mutex> lock(consoleMutex);
@@ -358,12 +166,238 @@ void logFill(const std::string& symbol, double price, double quantity, double si
 
 // Clear the console screen
 void clearScreen() {
-    std::lock_guard<std::mutex> lock(consoleMutex);
+    // Use lock-free approach for screen clearing to avoid potential deadlocks
 #ifdef _WIN32
     system("cls");
 #else
     system("clear");
 #endif
+}
+
+// Print the order book in a nicely formatted way
+// Always display exactly 10 price levels on each side for consistent layout
+void printOrderBook(OrderBook& book, int levels = 10) {
+    // Get current mid price with thread safety
+    double currentMidPrice;
+    
+    {
+        std::lock_guard<std::mutex> lock(dataMutex);
+        currentMidPrice = CryptoMarket::currentMidPrice;
+    }
+
+    // Collection of book data
+    std::vector<BookLevel> asks;
+    std::vector<BookLevel> bids;
+    
+    try {
+        // Collect ask levels (around current mid price)
+        double askTotal = 0.0;
+        double askValueTotal = 0.0;
+        
+        // For each ask level, look within a certain range of the current price
+        double startAskPrice = currentMidPrice - 50.0;  // Look below current price
+        double endAskPrice = currentMidPrice + 150.0;   // Look above current price
+        
+        for (double price = startAskPrice; price <= endAskPrice; price += CryptoMarket::PRICE_STEP) {
+            // Create a dummy order to find matching limit
+            auto dummyOrder = std::make_shared<Order>(0, Side::BUY, OrderType::LIMIT, CryptoMarket::SYMBOL, price, 0.01);
+            
+            // If this dummy BUY order would match with a SELL order at this price, it means there's an ask at this price
+            bool hasOrders = false;
+            book.matchOrder(dummyOrder, [&hasOrders](const std::string&, double, double, double) {
+                hasOrders = true;
+            });
+            
+            if (hasOrders) {
+                // In a real implementation, we would have a method to get the total volume at this price level
+                // For demonstration purposes, we'll use a random value as a proxy
+                double qty = 0.5 + (static_cast<double>(rand()) / RAND_MAX) * 3.0;
+                askTotal += qty;
+                askValueTotal += (qty * price);
+                asks.push_back({price, qty, askTotal, askValueTotal});
+                
+                if (asks.size() >= static_cast<size_t>(levels)) break;
+            }
+        }
+        
+        // Collect bid levels (around current mid price)
+        double bidTotal = 0.0;
+        double bidValueTotal = 0.0;
+        
+        // For each bid level, look within a certain range of the current price
+        double startBidPrice = currentMidPrice + 50.0;  // Look above current price
+        double endBidPrice = currentMidPrice - 150.0;   // Look below current price
+        
+        for (double price = startBidPrice; price >= endBidPrice; price -= CryptoMarket::PRICE_STEP) {
+            // Create a dummy order to find matching limit
+            auto dummyOrder = std::make_shared<Order>(0, Side::SELL, OrderType::LIMIT, CryptoMarket::SYMBOL, price, 0.01);
+            
+            // If this dummy SELL order would match with a BUY order at this price, it means there's a bid at this price
+            // We use a local callback to avoid modifying the actual order book
+            bool hasOrders = false;
+            book.matchOrder(dummyOrder, [&hasOrders](const std::string&, double, double, double) {
+                hasOrders = true;
+            });
+            
+            if (hasOrders) {
+                // In a real implementation, we would have a method to get the total volume at this price level
+                // For demonstration purposes, we'll use a random value as a proxy
+                double qty = 0.5 + (static_cast<double>(rand()) / RAND_MAX) * 3.0;
+                bidTotal += qty;
+                bidValueTotal += (qty * price);
+                bids.push_back({price, qty, bidTotal, bidValueTotal});
+                
+                if (bids.size() >= static_cast<size_t>(levels)) break;
+            }
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Error collecting order book data: " << e.what() << std::endl;
+    }
+
+    // Now display the book with console lock
+    try {
+        std::lock_guard<std::mutex> consoleLock(consoleMutex);
+        
+        std::cout << BOLD << "===== " << CryptoMarket::SYMBOL << " ORDER BOOK =====" << RESET << std::endl;
+        
+        // Column widths for alignment
+        const int priceWidth = 14;
+        const int qtyWidth = 12;
+        const int totalQtyWidth = 12;
+        const int totalValueWidth = 16;
+        
+        // Print ask/sell section headers
+        std::cout << std::string(priceWidth + qtyWidth + totalQtyWidth + totalValueWidth, '-') << std::endl;
+        std::cout << BOLD << RED 
+                  << std::left << std::setw(priceWidth) << "Price(USDT)" 
+                  << std::right << std::setw(qtyWidth) << "Qty(ETH)" 
+                  << std::right << std::setw(totalQtyWidth) << "Total(ETH)" 
+                  << std::right << std::setw(totalValueWidth) << "Total(USDT)" 
+                  << RESET << std::endl;
+        std::cout << std::string(priceWidth + qtyWidth + totalQtyWidth + totalValueWidth, '-') << std::endl;
+        
+        // Print ask/sell orders (in descending price order)
+        std::sort(asks.begin(), asks.end(), [](const BookLevel& a, const BookLevel& b) {
+            return a.price > b.price; // Sort in descending order
+        });
+        
+        // Calculate running totals from lowest ask to highest
+        std::vector<double> runningAsksQty(asks.size());
+        std::vector<double> runningAsksValue(asks.size());
+        
+        if (!asks.empty()) {
+            // Create a copy of asks sorted by ascending price for running totals
+            std::vector<BookLevel> asksAscending = asks;
+            std::sort(asksAscending.begin(), asksAscending.end(), [](const BookLevel& a, const BookLevel& b) {
+                return a.price < b.price;
+            });
+            
+            double runningQty = 0;
+            double runningValue = 0;
+            for (size_t i = 0; i < asksAscending.size(); i++) {
+                runningQty += asksAscending[i].quantity;
+                runningValue += (asksAscending[i].quantity * asksAscending[i].price);
+                
+                // Find this price level in the original asks array
+                for (size_t j = 0; j < asks.size(); j++) {
+                    if (std::abs(asks[j].price - asksAscending[i].price) < 0.001) {
+                        runningAsksQty[j] = runningQty;
+                        runningAsksValue[j] = runningValue;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // Always display exactly 'levels' rows for asks, regardless of how many we have
+        int displayed = 0;
+        for (size_t i = 0; i < asks.size() && displayed < levels; i++) {
+            std::cout << RED << std::left << std::setw(priceWidth) << formatWithCommas(asks[i].price, 1)
+                      << std::right << std::setw(qtyWidth) << formatWithCommas(asks[i].quantity, 3)
+                      << std::right << std::setw(totalQtyWidth) << formatWithCommas(runningAsksQty[i], 3)
+                      << std::right << std::setw(totalValueWidth) << formatWithCommas(runningAsksValue[i], 1)
+                      << RESET << std::endl;
+            displayed++;
+        }
+        
+        // Add empty rows if we don't have enough ask levels
+        for (int i = displayed; i < levels; i++) {
+            std::cout << RED << std::left << std::setw(priceWidth) << "-"
+                      << std::right << std::setw(qtyWidth) << "-"
+                      << std::right << std::setw(totalQtyWidth) << "-"
+                      << std::right << std::setw(totalValueWidth) << "-"
+                      << RESET << std::endl;
+        }
+        
+        // Print spread section
+        std::cout << std::string(priceWidth + qtyWidth + totalQtyWidth + totalValueWidth, '=') << std::endl;
+        
+        if (!bids.empty() && !asks.empty()) {
+            double bestBid = bids.front().price;
+            double bestAsk = asks.back().price;  // Last element in descending order is the lowest ask
+            double spread = bestAsk - bestBid;
+            double spreadPct = (spread / bestBid) * 100.0;
+            
+            // Calculate bid/ask midpoint
+            double midpoint = (bestBid + bestAsk) / 2.0;
+            
+            std::cout << BOLD << CYAN << std::left << std::setw(priceWidth) << "SPREAD" 
+                      << std::right << std::setw(qtyWidth) << formatWithCommas(spread, 1) 
+                      << " ⟷ " << std::setprecision(2) << spreadPct << "%" << RESET << std::endl;
+                      
+            std::cout << BOLD << CYAN << std::left << std::setw(priceWidth) << "MID" 
+                      << std::right << std::setw(qtyWidth) << formatWithCommas(midpoint, 1) 
+                      << RESET << std::endl;
+        }
+        
+        std::cout << std::string(priceWidth + qtyWidth + totalQtyWidth + totalValueWidth, '=') << std::endl;
+        
+        // Print bid/buy section headers
+        std::cout << BOLD << GREEN 
+                  << std::left << std::setw(priceWidth) << "Price(USDT)" 
+                  << std::right << std::setw(qtyWidth) << "Qty(ETH)" 
+                  << std::right << std::setw(totalQtyWidth) << "Total(ETH)" 
+                  << std::right << std::setw(totalValueWidth) << "Total(USDT)" 
+                  << RESET << std::endl;
+        std::cout << std::string(priceWidth + qtyWidth + totalQtyWidth + totalValueWidth, '-') << std::endl;
+        
+        // Calculate running totals for bids
+        std::vector<double> runningBidsQty(bids.size());
+        std::vector<double> runningBidsValue(bids.size());
+        
+        double runningQty = 0;
+        double runningValue = 0;
+        for (size_t i = 0; i < bids.size(); i++) {
+            runningQty += bids[i].quantity;
+            runningValue += (bids[i].quantity * bids[i].price);
+            runningBidsQty[i] = runningQty;
+            runningBidsValue[i] = runningValue;
+        }
+        
+        // Always display exactly 'levels' rows for bids, regardless of how many we have
+        int displayedBids = 0;
+        for (size_t i = 0; i < bids.size() && displayedBids < levels; i++) {
+            std::cout << GREEN << std::left << std::setw(priceWidth) << formatWithCommas(bids[i].price, 1)
+                      << std::right << std::setw(qtyWidth) << formatWithCommas(bids[i].quantity, 3)
+                      << std::right << std::setw(totalQtyWidth) << formatWithCommas(runningBidsQty[i], 3)
+                      << std::right << std::setw(totalValueWidth) << formatWithCommas(runningBidsValue[i], 1)
+                      << RESET << std::endl;
+            displayedBids++;
+        }
+        
+        // Add empty rows if we don't have enough bid levels
+        for (int i = displayedBids; i < levels; i++) {
+            std::cout << GREEN << std::left << std::setw(priceWidth) << "-"
+                      << std::right << std::setw(qtyWidth) << "-"
+                      << std::right << std::setw(totalQtyWidth) << "-"
+                      << std::right << std::setw(totalValueWidth) << "-"
+                      << RESET << std::endl;
+        }
+        
+        std::cout << std::string(priceWidth + qtyWidth + totalQtyWidth + totalValueWidth, '=') << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "Error displaying order book: " << e.what() << std::endl;
+    }
 }
 
 int main() {
@@ -379,14 +413,14 @@ int main() {
     // Add initial orders to populate the book
     std::cout << "Populating initial order book..." << std::endl;
     
-    // Create 50 random buy orders
-    for (int i = 0; i < 50; i++) {
+    // Create 200 random buy orders for deep liquidity
+    for (int i = 0; i < 200; i++) {
         auto order = generateRandomOrder(rng, true, Side::BUY);
         book.addOrder(order, logFill);
     }
     
-    // Create 50 random sell orders
-    for (int i = 0; i < 50; i++) {
+    // Create 200 random sell orders for deep liquidity
+    for (int i = 0; i < 200; i++) {
         auto order = generateRandomOrder(rng, true, Side::SELL);
         book.addOrder(order, logFill);
     }
@@ -401,7 +435,7 @@ int main() {
     double lowPrice = CryptoMarket::currentMidPrice;
     
     // Order tracking counters
-    uint64_t ordersReceived = 100; // Start at 100 since we added 100 initial orders
+    uint64_t ordersReceived = 400; // Start at 400 since we added 400 initial orders
     uint64_t ordersFilled = 0;
     
     // Simulation loop - runs until user interrupts
@@ -411,89 +445,103 @@ int main() {
     int maxSteps = 10000; // Increase maximum steps (effectively infinite)
     
     while (step < maxSteps) {
-        step++;
-        
-        // Update market price with random walk
-        updateMarketPrice(rng);
-        
-        // Update high/low prices
-        highPrice = std::max(highPrice, CryptoMarket::currentMidPrice);
-        lowPrice = std::min(lowPrice, CryptoMarket::currentMidPrice);
-        
-        // Clear screen for better visualization
-        clearScreen();
-        
-        // Show market statistics with mutex protection
-        {
-            std::lock_guard<std::mutex> lock(consoleMutex);
-            std::cout << "===== ETH/USD MARKET STATISTICS =====" << std::endl;
-            std::cout << "Step: " << step << " of " << maxSteps << std::endl;
-            std::cout << "Current Mid Price: $" << std::fixed << std::setprecision(2) 
-                      << CryptoMarket::currentMidPrice << std::endl;
-            std::cout << "24h Range: $" << lowPrice << " - $" << highPrice << std::endl;
-            std::cout << "Trades: " << tradeCount << " | Volume: " 
-                      << std::setprecision(3) << totalVolume << " ETH" << std::endl;
-            std::cout << "Orders Received: " << ordersReceived << " | Orders Filled: " << ordersFilled 
-                      << " | Fill Rate: " << std::fixed << std::setprecision(2) 
-                      << (ordersReceived > 0 ? (static_cast<double>(ordersFilled) / ordersReceived) * 100.0 : 0.0) << "%" << std::endl;
-            std::cout << std::string(60, '-') << std::endl;
-        }
-        
-        // Add random number of orders (1-8) - increased from 1-5
-        std::uniform_int_distribution<> numOrdersDist(1, 8);
-        int numOrders = numOrdersDist(rng);
-        
-        // Bias toward more orders in volatile markets
-        double volatilityFactor = std::abs(CryptoMarket::currentMidPrice - CryptoMarket::BASE_PRICE) 
-                                 / CryptoMarket::PRICE_VOLATILITY;
-        if (volatilityFactor > 1.0 && rand() % 3 == 0) {
-            numOrders += 3;  // Add more orders in volatile periods (increased from +2)
-        }
-        
-        // Update orders received counter
-        ordersReceived += numOrders;
-        
-        for (int i = 0; i < numOrders; i++) {
-            auto order = generateRandomOrder(rng);
+        try {
+            step++;
             
-            // Optional: Log new orders with mutex protection
+            // Update market price with random walk
+            updateMarketPrice(rng);
+            
+            // Update high/low prices
             {
-                std::lock_guard<std::mutex> lock(consoleMutex);
-                std::cout << "New " << (order->getSide() == Side::BUY ? "BUY" : "SELL")
-                          << " order: " << std::fixed << std::setprecision(3) 
-                          << order->getQuantity() << " ETH @ $" 
-                          << std::setprecision(2) << order->getPrice() << std::endl;
+                std::lock_guard<std::mutex> lock(dataMutex);
+                highPrice = std::max(highPrice, CryptoMarket::currentMidPrice);
+                lowPrice = std::min(lowPrice, CryptoMarket::currentMidPrice);
             }
             
-            // Add the order and track fills through callback
-            book.addOrder(order, [&tradeCount, &totalVolume, &ordersFilled](const std::string& symbol, 
-                                                           double price, 
-                                                           double quantity, 
-                                                           double side) {
-                // Update trading statistics with mutex protection
-                {
+            // Clear screen for better visualization
+            clearScreen();
+            
+            // Print order book first at top of screen so it stays in a fixed position
+            printOrderBook(book, 10);
+            
+            // Show market statistics with mutex protection below the order book
+            {
+                std::lock_guard<std::mutex> lock(consoleMutex);
+                std::cout << std::string(60, '=') << std::endl;
+                std::cout << "===== ETH/USD MARKET STATISTICS =====" << std::endl;
+                std::cout << "Step: " << step << " of " << maxSteps << std::endl;
+                std::cout << "Current Mid Price: $" << std::fixed << std::setprecision(2) 
+                          << CryptoMarket::currentMidPrice << std::endl;
+                std::cout << "24h Range: $" << lowPrice << " - $" << highPrice << std::endl;
+                std::cout << "Trades: " << tradeCount << " | Volume: " 
+                          << std::setprecision(3) << totalVolume << " ETH" << std::endl;
+                std::cout << "Orders Received: " << ordersReceived << " | Orders Filled: " << ordersFilled 
+                          << " | Fill Rate: " << std::fixed << std::setprecision(2) 
+                          << (ordersReceived > 0 ? (static_cast<double>(ordersFilled) / ordersReceived) * 100.0 : 0.0) << "%" << std::endl;
+                std::cout << std::string(60, '-') << std::endl;
+                std::cout << "RECENT MARKET ACTIVITY:" << std::endl;
+            }
+            
+            // Add large number of orders per step (15-30) for fast market simulation
+            std::uniform_int_distribution<> numOrdersDist(15, 30);
+            int numOrders = numOrdersDist(rng);
+            
+            // Bias toward even more orders in volatile markets
+            double volatilityFactor;
+            {
+                std::lock_guard<std::mutex> lock(dataMutex);
+                volatilityFactor = std::abs(CryptoMarket::currentMidPrice - CryptoMarket::BASE_PRICE) 
+                                     / CryptoMarket::PRICE_VOLATILITY;
+            }
+            
+            if (volatilityFactor > 1.0 && rand() % 3 == 0) {
+                numOrders += 10;  // Add many more orders in volatile periods
+            }
+            
+            // Update orders received counter
+            ordersReceived += numOrders;
+            
+            for (int i = 0; i < numOrders; i++) {
+                auto order = generateRandomOrder(rng);
+                
+                // Only log a sample of orders to reduce console output and increase performance
+                if (i % 10 == 0) { // Log only 1 out of every 10 orders
                     std::lock_guard<std::mutex> lock(consoleMutex);
-                    tradeCount++;
-                    totalVolume += quantity;
-                    ordersFilled++; // Increment fill counter
+                    std::cout << "New " << (order->getSide() == Side::BUY ? "BUY" : "SELL")
+                              << " order: " << std::fixed << std::setprecision(3) 
+                              << order->getQuantity() << " ETH @ $" 
+                              << std::setprecision(2) << order->getPrice() << std::endl;
                 }
                 
-                // Log the fill (apply mutex lock explicitly here)
-                {
-                    std::lock_guard<std::mutex> lock(consoleMutex);
-                    std::cout << "TRADE: " << symbol << " " 
-                              << (side > 0 ? "BUY" : "SELL") << " " 
-                              << std::fixed << std::setprecision(3) << quantity << " ETH @ " 
-                              << std::setprecision(2) << price << " USD" << std::endl;
-                }
-            });
-        }
-        
-        // Occasionally cancel old orders (simulates orders expiring)
-        if (step % 5 == 0) {
-            // Try to cancel more random old orders (increased from 1 to up to 3)
+                // Add the order and track fills through callback
+                book.addOrder(order, [&tradeCount, &totalVolume, &ordersFilled](const std::string& symbol, 
+                                                               double price, 
+                                                               double quantity, 
+                                                               double side) {
+                    // Update trading statistics with mutex protection
+                    {
+                        std::lock_guard<std::mutex> lock(consoleMutex);
+                        tradeCount++;
+                        totalVolume += quantity;
+                        ordersFilled++; // Increment fill counter
+                    }
+                    
+                    // Log only some trades to reduce console output and increase performance
+                    // Use the price as a pseudo-random value for sampling trades to log
+                    if (static_cast<int>(price * 10) % 5 == 0) { // Log roughly 20% of trades
+                        std::lock_guard<std::mutex> lock(consoleMutex);
+                        std::cout << "TRADE: " << symbol << " " 
+                                  << (side > 0 ? "BUY" : "SELL") << " " 
+                                  << std::fixed << std::setprecision(3) << quantity << " ETH @ " 
+                                  << std::setprecision(2) << price << " USD" << std::endl;
+                    }
+                });
+            }
+            
+            // Cancel orders every step (not just occasionally)
+            // Try to cancel many random old orders (5-15 per step)
             if (nextOrderId > 10) {
-                std::uniform_int_distribution<> numCancelsDist(1, 3);
+                std::uniform_int_distribution<> numCancelsDist(5, 15);
                 int numCancels = numCancelsDist(rng);
                 
                 for (int i = 0; i < numCancels; i++) {
@@ -502,36 +550,15 @@ int main() {
                     book.cancelOrder(idToCancel);
                 }
             }
+            
+            // Use a moderate delay between steps (80ms) - fast but not too fast
+            std::this_thread::sleep_for(std::chrono::milliseconds(80));
         }
-        
-        // Print updated order book
-        printOrderBook(book, 10);
-        
-        // Wait a moment before next step - decreased from 800ms to 500ms for faster simulation
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        catch (const std::exception& e) {
+            std::cerr << "Error in simulation loop: " << e.what() << std::endl;
+            break;
+        }
     }
     
     return 0;
 }
-
-
-
-
-// 1. Added ANSI color codes for terminal formatting
-// - RED for sell orders (asks)
-// - GREEN for buy orders (bids)
-// - BOLD/CYAN for spread and midpoint display
-// 2. Created a number formatting function that adds comma separators to large numbers
-// 3. Modified the BookLevel struct to include totalValue field to track cumulative value
-// 4. Implemented a completely redesigned order book display with:
-// - Clear headers for each column: Price(USDT), Qty(ETH), Total(ETH), Total(USDT)
-// - Proper alignment - left for price, right for numeric columns
-// - Consistent decimal formatting - 1 decimal for prices, 3 for quantities
-// - Visually separated asks and bids sections with double separator lines
-// - Spread and midpoint information in the middle
-// - Colored output for better readability
-// - Properly calculated cumulative totals in both quantity and value
-// 5. Added proper sorting to show:
-// - ASK/SELL orders in descending price order (highest first)
-// - BID/BUY orders in descending price order (highest first)
-// 6. Implemented running totals calculations for volume and value on both sides of the book
