@@ -12,6 +12,12 @@
 // Global order ID counter
 std::atomic<uint64_t> nextOrderId{1};
 
+// Mutex for thread-safe access to console output
+std::mutex consoleMutex;
+
+// Mutex for shared data access
+std::mutex dataMutex;
+
 // Market data for ETH/USD with price simulation parameters
 class CryptoMarket {
 public:
@@ -42,6 +48,9 @@ struct BookLevel {
 
 // Update market price using random walk with mean reversion
 void updateMarketPrice(std::mt19937& rng) {
+    // Use mutex to protect market price updates
+    std::lock_guard<std::mutex> lock(dataMutex);
+    
     // Random walk component
     std::normal_distribution<double> priceChange(0.0, CryptoMarket::PRICE_VOLATILITY);
     double randomComponent = priceChange(rng);
@@ -63,6 +72,13 @@ void updateMarketPrice(std::mt19937& rng) {
 
 // Generate a random limit order (either buy or sell) using current market conditions
 std::shared_ptr<Order> generateRandomOrder(std::mt19937& rng, bool forceSide = false, Side side = Side::BUY) {
+    // Get a copy of current mid price with thread safety
+    double currentMidPrice;
+    {
+        std::lock_guard<std::mutex> lock(dataMutex);
+        currentMidPrice = CryptoMarket::currentMidPrice;
+    }
+    
     // Generate random order properties
     std::uniform_int_distribution<> sideDist(0, 1);
     std::uniform_real_distribution<> qtyDist(CryptoMarket::MIN_QTY, CryptoMarket::MAX_QTY);
@@ -73,7 +89,7 @@ std::shared_ptr<Order> generateRandomOrder(std::mt19937& rng, bool forceSide = f
     }
     
     // Price distribution depends on order side (clustering around mid price)
-    double priceMean = CryptoMarket::currentMidPrice;
+    double priceMean = currentMidPrice;
     double priceStd = CryptoMarket::PRICE_VOLATILITY;
     
     // Buy orders tend to be below mid price, sell orders above
@@ -88,16 +104,20 @@ std::shared_ptr<Order> generateRandomOrder(std::mt19937& rng, bool forceSide = f
     // Generate price rounded to price step
     double rawPrice = priceDist(rng);
     
+    // Calculate price limits based on the current mid price
+    double minPrice = currentMidPrice - 100.0;
+    double maxPrice = currentMidPrice + 100.0;
+    
     // Ensure price is within limits
-    rawPrice = std::max(rawPrice, CryptoMarket::MIN_PRICE());
-    rawPrice = std::min(rawPrice, CryptoMarket::MAX_PRICE());
+    rawPrice = std::max(rawPrice, minPrice);
+    rawPrice = std::min(rawPrice, maxPrice);
     
     double price = std::round(rawPrice / CryptoMarket::PRICE_STEP) * CryptoMarket::PRICE_STEP;
     
     // Generate quantity rounded to 0.01 ETH
     double quantity = std::round(qtyDist(rng) * 100) / 100.0;
     
-    // Create order
+    // Create order with thread-safe ID increment
     return std::make_shared<Order>(nextOrderId++, side, OrderType::LIMIT, 
                                    CryptoMarket::SYMBOL, price, quantity);
 }
@@ -137,10 +157,18 @@ std::string formatWithCommas(double value, int precision) {
 
 // Print the order book in a nicely formatted way
 void printOrderBook(OrderBook& book, int levels) {
+    std::lock_guard<std::mutex> lock(consoleMutex);
     std::cout << BOLD << "===== " << CryptoMarket::SYMBOL << " ORDER BOOK =====" << RESET << std::endl;
     
     // Get bid and ask price points from the order book
     // For a real implementation, we'd add methods to OrderBook to access these directly
+    
+    // Get current mid price with thread safety
+    double currentMidPrice;
+    {
+        std::lock_guard<std::mutex> lock(dataMutex);
+        currentMidPrice = CryptoMarket::currentMidPrice;
+    }
     
     // Collect ask levels (around current mid price)
     std::vector<BookLevel> asks;
@@ -148,8 +176,8 @@ void printOrderBook(OrderBook& book, int levels) {
     double askValueTotal = 0.0;
     
     // For each ask level, look within a certain range of the current price
-    double startAskPrice = CryptoMarket::currentMidPrice - 50.0;  // Look below current price
-    double endAskPrice = CryptoMarket::currentMidPrice + 150.0;   // Look above current price
+    double startAskPrice = currentMidPrice - 50.0;  // Look below current price
+    double endAskPrice = currentMidPrice + 150.0;   // Look above current price
     
     for (double price = startAskPrice; price <= endAskPrice; price += CryptoMarket::PRICE_STEP) {
         // Create a dummy order to find matching limit
@@ -179,8 +207,8 @@ void printOrderBook(OrderBook& book, int levels) {
     double bidValueTotal = 0.0;
     
     // For each bid level, look within a certain range of the current price
-    double startBidPrice = CryptoMarket::currentMidPrice + 50.0;  // Look above current price
-    double endBidPrice = CryptoMarket::currentMidPrice - 150.0;   // Look below current price
+    double startBidPrice = currentMidPrice + 50.0;  // Look above current price
+    double endBidPrice = currentMidPrice - 150.0;   // Look below current price
     
     for (double price = startBidPrice; price >= endBidPrice; price -= CryptoMarket::PRICE_STEP) {
         // Create a dummy order to find matching limit
@@ -321,6 +349,7 @@ void printOrderBook(OrderBook& book, int levels) {
 
 // Handle order fills
 void logFill(const std::string& symbol, double price, double quantity, double side) {
+    std::lock_guard<std::mutex> lock(consoleMutex);
     std::cout << "TRADE: " << symbol << " " 
               << (side > 0 ? "BUY" : "SELL") << " " 
               << std::fixed << std::setprecision(3) << quantity << " ETH @ " 
@@ -329,6 +358,7 @@ void logFill(const std::string& symbol, double price, double quantity, double si
 
 // Clear the console screen
 void clearScreen() {
+    std::lock_guard<std::mutex> lock(consoleMutex);
 #ifdef _WIN32
     system("cls");
 #else
@@ -370,11 +400,17 @@ int main() {
     double highPrice = CryptoMarket::currentMidPrice;
     double lowPrice = CryptoMarket::currentMidPrice;
     
+    // Order tracking counters
+    uint64_t ordersReceived = 100; // Start at 100 since we added 100 initial orders
+    uint64_t ordersFilled = 0;
+    
     // Simulation loop - runs until user interrupts
     std::cout << "\nStarting infinite simulation (Ctrl+C to exit)...\n" << std::endl;
     
     int step = 0;
-    while (true) {
+    int maxSteps = 10000; // Increase maximum steps (effectively infinite)
+    
+    while (step < maxSteps) {
         step++;
         
         // Update market price with random walk
@@ -387,68 +423,92 @@ int main() {
         // Clear screen for better visualization
         clearScreen();
         
-        // Show market statistics
-        std::cout << "===== ETH/USD MARKET STATISTICS =====" << std::endl;
-        std::cout << "Step: " << step << std::endl;
-        std::cout << "Current Mid Price: $" << std::fixed << std::setprecision(2) 
-                  << CryptoMarket::currentMidPrice << std::endl;
-        std::cout << "24h Range: $" << lowPrice << " - $" << highPrice << std::endl;
-        std::cout << "Trades: " << tradeCount << " | Volume: " 
-                  << std::setprecision(3) << totalVolume << " ETH" << std::endl;
-        std::cout << std::string(40, '-') << std::endl;
+        // Show market statistics with mutex protection
+        {
+            std::lock_guard<std::mutex> lock(consoleMutex);
+            std::cout << "===== ETH/USD MARKET STATISTICS =====" << std::endl;
+            std::cout << "Step: " << step << " of " << maxSteps << std::endl;
+            std::cout << "Current Mid Price: $" << std::fixed << std::setprecision(2) 
+                      << CryptoMarket::currentMidPrice << std::endl;
+            std::cout << "24h Range: $" << lowPrice << " - $" << highPrice << std::endl;
+            std::cout << "Trades: " << tradeCount << " | Volume: " 
+                      << std::setprecision(3) << totalVolume << " ETH" << std::endl;
+            std::cout << "Orders Received: " << ordersReceived << " | Orders Filled: " << ordersFilled 
+                      << " | Fill Rate: " << std::fixed << std::setprecision(2) 
+                      << (ordersReceived > 0 ? (static_cast<double>(ordersFilled) / ordersReceived) * 100.0 : 0.0) << "%" << std::endl;
+            std::cout << std::string(60, '-') << std::endl;
+        }
         
-        // Add random number of orders (1-5)
-        std::uniform_int_distribution<> numOrdersDist(1, 5);
+        // Add random number of orders (1-8) - increased from 1-5
+        std::uniform_int_distribution<> numOrdersDist(1, 8);
         int numOrders = numOrdersDist(rng);
         
         // Bias toward more orders in volatile markets
         double volatilityFactor = std::abs(CryptoMarket::currentMidPrice - CryptoMarket::BASE_PRICE) 
                                  / CryptoMarket::PRICE_VOLATILITY;
         if (volatilityFactor > 1.0 && rand() % 3 == 0) {
-            numOrders += 2;  // Add more orders in volatile periods
+            numOrders += 3;  // Add more orders in volatile periods (increased from +2)
         }
+        
+        // Update orders received counter
+        ordersReceived += numOrders;
         
         for (int i = 0; i < numOrders; i++) {
             auto order = generateRandomOrder(rng);
             
-            // Optional: Log new orders
-            std::cout << "New " << (order->getSide() == Side::BUY ? "BUY" : "SELL")
-                      << " order: " << std::fixed << std::setprecision(3) 
-                      << order->getQuantity() << " ETH @ $" 
-                      << std::setprecision(2) << order->getPrice() << std::endl;
+            // Optional: Log new orders with mutex protection
+            {
+                std::lock_guard<std::mutex> lock(consoleMutex);
+                std::cout << "New " << (order->getSide() == Side::BUY ? "BUY" : "SELL")
+                          << " order: " << std::fixed << std::setprecision(3) 
+                          << order->getQuantity() << " ETH @ $" 
+                          << std::setprecision(2) << order->getPrice() << std::endl;
+            }
             
             // Add the order and track fills through callback
-            book.addOrder(order, [&tradeCount, &totalVolume](const std::string& symbol, 
+            book.addOrder(order, [&tradeCount, &totalVolume, &ordersFilled](const std::string& symbol, 
                                                            double price, 
                                                            double quantity, 
                                                            double side) {
-                // Update trading statistics
-                tradeCount++;
-                totalVolume += quantity;
+                // Update trading statistics with mutex protection
+                {
+                    std::lock_guard<std::mutex> lock(consoleMutex);
+                    tradeCount++;
+                    totalVolume += quantity;
+                    ordersFilled++; // Increment fill counter
+                }
                 
-                // Log the fill
-                std::cout << "TRADE: " << symbol << " " 
-                          << (side > 0 ? "BUY" : "SELL") << " " 
-                          << std::fixed << std::setprecision(3) << quantity << " ETH @ " 
-                          << std::setprecision(2) << price << " USD" << std::endl;
+                // Log the fill (apply mutex lock explicitly here)
+                {
+                    std::lock_guard<std::mutex> lock(consoleMutex);
+                    std::cout << "TRADE: " << symbol << " " 
+                              << (side > 0 ? "BUY" : "SELL") << " " 
+                              << std::fixed << std::setprecision(3) << quantity << " ETH @ " 
+                              << std::setprecision(2) << price << " USD" << std::endl;
+                }
             });
         }
         
         // Occasionally cancel old orders (simulates orders expiring)
         if (step % 5 == 0) {
-            // Try to cancel a random old order
+            // Try to cancel more random old orders (increased from 1 to up to 3)
             if (nextOrderId > 10) {
-                std::uniform_int_distribution<> idDist(1, nextOrderId-1);
-                Order::OrderID idToCancel = idDist(rng);
-                book.cancelOrder(idToCancel);
+                std::uniform_int_distribution<> numCancelsDist(1, 3);
+                int numCancels = numCancelsDist(rng);
+                
+                for (int i = 0; i < numCancels; i++) {
+                    std::uniform_int_distribution<> idDist(1, nextOrderId-1);
+                    Order::OrderID idToCancel = idDist(rng);
+                    book.cancelOrder(idToCancel);
+                }
             }
         }
         
         // Print updated order book
         printOrderBook(book, 10);
         
-        // Wait a moment before next step
-        std::this_thread::sleep_for(std::chrono::milliseconds(800));
+        // Wait a moment before next step - decreased from 800ms to 500ms for faster simulation
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
     
     return 0;
