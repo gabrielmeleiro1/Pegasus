@@ -48,7 +48,7 @@ private:
 
     // Orders in FIFO order
     // In production, you might store custom linked-list nodes or iterators for O(1) removal.
-    mutable std::mutex m_ordersMutex = {}; ///< Mutex for protecting the orders list
+    mutable std::mutex m_ordersMutex; ///< Mutex for protecting the orders list
     std::list<OrderPtr> m_orders;
 
     /**

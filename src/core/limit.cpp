@@ -5,7 +5,8 @@
 Limit::Limit(double price)
     : m_price(price),
       m_totalVolume(0.0),
-      m_totalVolumeAtomic(0.0)
+      m_totalVolumeAtomic(0.0),
+      m_ordersMutex()
 {
 }
 
